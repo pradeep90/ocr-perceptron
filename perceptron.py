@@ -2,12 +2,19 @@ import tornado.ioloop
 import tornado.web
 import csv
 import json
+import datetime
+import matplotlib.pyplot as plt
+import re
 
 # Perceptron Config TODO: obtain config from file
 threshold = 0.5
 learning_rate = 0.1
 trained_perceptrons = {}
 verbose = True
+
+NUM_ROWS = 7
+NUM_COLS = 5
+SAVE_IMAGES = False
 
 # Helper method to find if a csv row is empty
 def is_row_empty(row):
@@ -33,7 +40,7 @@ def process_data(file = 'training_data.csv'):
                 if row[0] != '': #new class
                     currentClass = row[0]
                     data[currentClass] = []
-                elements = map(lambda x: int(x), row[1:])    
+                elements = map(lambda x: int(x), row[1:])
                 data[currentClass].extend(elements)
     return data
 
@@ -43,17 +50,21 @@ def dot_product(values, weights):
 
 # Trains the perceptron using the given training_set
 # The training set must be a list of tuples containing (example, desired_output)
-def train(training_set):
+def train(training_set, tag = '', training_data = {}):
     weights = [0] * len(training_set[0][0])
+    keys = training_data.keys()
     while True:
         error_count = 0
-        for input_vector, desired_output in training_set:
+        for i, (input_vector, desired_output) in enumerate(training_set):
             result = dot_product(input_vector, weights) > threshold
             error = desired_output - result
             if error != 0:
                 error_count += 1
                 for index, value in enumerate(input_vector):
                     weights[index] += learning_rate * error * value
+                if SAVE_IMAGES:
+                    print 'Mistake on {} when training {}'.format(keys[i], tag)
+                    save_weights(weights, 'during-training', '{}-mistake-on-{}'.format(tag, keys[i]))
         if error_count == 0:
             break
     return weights
@@ -80,14 +91,35 @@ def classify(sensor_data, perceptrons):
 def recognize(sensor_data, weights):
     result = dot_product(sensor_data, weights)
     verbose("output: {0} threshold: {1}".format(result, threshold))
-    return result 
+    return result
 
+def save_image(image, name, vmin = -128, vmax = 127):
+    """Save a grayscale image without showing it.
+
+Gray means the pixel is close to 0.
+White means it's close to vmax.
+Black means it's close to vmin."""
+    plt.imshow(image, cmap = 'gray', vmin = vmin, vmax = vmax)
+    plt.savefig(name, bbox_inches = 'tight')
+    plt.close()
+
+def get_matrix(xs, ncol):
+    return [xs[i:i+ncol] for i in xrange(0, len(xs), ncol)]
+
+def save_weights(weights, overall_name, classifier_label):
+    time_slug = '-'.join(re.split(r'[ .]', str(datetime.datetime.now())))
+    save_image(get_matrix(weights, NUM_COLS),
+               'images/{}-{}-{}.png'.format(overall_name, time_slug, classifier_label),
+               vmin = -0.2, vmax = 0.2)
 
 # Creates and begins perceptron training
 def create_perceptrons():
     data = process_data()
     for tag in data.iterkeys():
-        trained_perceptrons[tag] = train(create_training_set(tag, data))
+        trained_perceptrons[tag] = train(create_training_set(tag, data), tag = tag, training_data = data)
+        if SAVE_IMAGES:
+            print tag, trained_perceptrons[tag]
+            save_weights(trained_perceptrons[tag], 'perceptron-trained', tag)
 
 def verbose(s):
     if verbose:
@@ -105,7 +137,7 @@ def init():
 class MainHandler(tornado.web.RequestHandler):
     def get(self):
         self.render('index.html')
-        
+
 class RecognizeHandler(tornado.web.RequestHandler):
     def post(self):
         sensor_data = json.loads(self.request.body)['sensor']
@@ -116,7 +148,7 @@ def make_app():
     return tornado.web.Application([
         (r"/recognize", RecognizeHandler),
         (r"/", MainHandler),
-        (r"/(.*)", 
+        (r"/(.*)",
             tornado.web.StaticFileHandler,
             {"path":r"web/"})
     ])
@@ -127,4 +159,3 @@ if __name__ == "__main__":
     app.listen(8000)
     print "Listening to port :8000"
     tornado.ioloop.IOLoop.current().start()
-        
